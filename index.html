@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full bg-slate-50">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
+    <title>清流記帳 - 專業版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <style>
+        body { -webkit-tap-highlight-color: transparent; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="h-full text-slate-800 antialiased flex flex-col bg-slate-50">
+
+    <div id="root" class="h-full flex flex-col bg-slate-50"></div>
+
+    <script>
+        const e = React.createElement;
+
+        // 安全的 LocalStorage 模組
+        const safeStorage = {
+            getItem: (key) => {
+                try { return localStorage.getItem(key); } 
+                catch (e) { console.warn("Storage blocked"); return null; }
+            },
+            setItem: (key, value) => {
+                try { localStorage.setItem(key, value); } 
+                catch (e) { console.warn("Storage blocked"); }
+            }
+        };
+
+        function App() {
+            // 狀態初始化
+            const [books, setBooks] = React.useState(() => {
+                const saved = safeStorage.getItem('accounting_books');
+                return saved ? JSON.parse(saved) : [{ id: '1', name: '個人生活帳', budget: 0, icon: '🏠' }];
+            });
+            
+            const [transactions, setTransactions] = React.useState(() => {
+                const saved = safeStorage.getItem('accounting_txs');
+                return saved ? JSON.parse(saved) : [];
+            });
+
+            const [currentBookId, setCurrentBookId] = React.useState('1');
+            const [activeTab, setActiveTab] = React.useState('home'); // home, list, analysis
+            const [isModalOpen, setIsModalOpen] = React.useState(false);
+            const [isBookModalOpen, setIsBookModalOpen] = React.useState(false);
+
+            // 表單狀態
+            const [txType, setTxType] = React.useState('expense');
+            const [txAmount, setTxAmount] = React.useState('');
+            const [txCategory, setTxCategory] = React.useState('餐飲');
+            const [txDate, setTxDate] = React.useState(new Date().toISOString().split('T')[0]);
+            const [txNote, setTxNote] = React.useState('');
+
+            // 新增帳冊狀態
+            const [newBookName, setNewBookName] = React.useState('');
+            const [newBookBudget, setNewBookBudget] = React.useState('');
+
+            // 儲存資料
+            React.useEffect(() => { safeStorage.setItem('accounting_books', JSON.stringify(books)); }, [books]);
+            React.useEffect(() => { safeStorage.setItem('accounting_txs', JSON.stringify(transactions)); }, [transactions]);
+
+            // 圖標渲染輔助
+            React.useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [activeTab, isModalOpen, isBookModalOpen, books, transactions]);
+
+            const currentBook = books.find(b => b.id === currentBookId) || books[0];
+            const bookTransactions = transactions.filter(t => t.bookId === currentBookId);
+
+            // 計算收支
+            const totalExpense = bookTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + Number(t.amount), 0);
+            const totalIncome = bookTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + Number(t.amount), 0);
+            const balance = totalIncome - totalExpense;
+
+            // 每週結算邏輯
+            const getWeeklyData = () => {
+                const now = new Date();
+                const getStartOfWeek = (d) => {
+                    const date = new Date(d);
+                    const day = date.getDay();
+                    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+                    return new Date(date.setDate(diff)).setHours(0,0,0,0);
+                };
+
+                const currentWeekStart = getStartOfWeek(now);
+                const oneWeekMS = 7 * 24 * 60 * 60 * 1000;
+
+                const weeks = [
+                    { label: '本週 (Mon-Sun)', start: currentWeekStart, end: currentWeekStart + oneWeekMS - 1, amt: 0 },
+                    { label: '上週', start: currentWeekStart - oneWeekMS, end: currentWeekStart - 1, amt: 0 },
+                    { label: '兩週前', start: currentWeekStart - (2 * oneWeekMS), end: currentWeekStart - oneWeekMS - 1, amt: 0 },
+                    { label: '三週前', start: currentWeekStart - (3 * oneWeekMS), end: currentWeekStart - (2 * oneWeekMS) - 1, amt: 0 }
+                ];
+
+                bookTransactions.filter(t => t.type === 'expense').forEach(t => {
+                    const txMS = new Date(t.date).getTime();
+                    weeks.forEach(w => {
+                        if (txMS >= w.start && txMS <= w.end) w.amt += Number(t.amount);
+                    });
+                });
+                return weeks;
+            };
+
+            const handleAddTransaction = (e) => {
+                e.preventDefault();
+                if (!txAmount || Number(txAmount) <= 0) return;
+                const newTx = {
+                    id: Date.now().toString(),
+                    bookId: currentBookId,
+                    type: txType,
+                    amount: Number(txAmount),
+                    category: txCategory,
+                    date: txDate,
+                    note: txNote
+                };
+                setTransactions([newTx, ...transactions]);
+                setIsModalOpen(false);
+                setTxAmount(''); setTxNote('');
+            };
+
+            const handleAddBook = (e) => {
+                e.preventDefault();
+                if (!newBookName.trim()) return;
+                const newBook = {
+                    id: Date.now().toString(),
+                    name: newBookName,
+                    budget: Number(newBookBudget) || 0,
+                    icon: '💼'
+                };
+                setBooks([...books, newBook]);
+                setCurrentBookId(newBook.id);
+                setIsBookModalOpen(false);
+                setNewBookName(''); setNewBookBudget('');
+            };
+
+            const deleteTransaction = (id) => {
+                setTransactions(transactions.filter(t => t.id !== id));
+            };
+
+            // JSX 替代方案：主畫面渲染
+            return e('div', { class: 'flex-1 flex flex-col h-full max-w-md mx-auto bg-slate-50 shadow-xl overflow-hidden relative' },
+                // 頂部標題列
+                e('header', { class: 'bg-white border-b border-slate-100 px-4 py-3 flex items-center justify-between shrink-0' },
+                    e('div', { class: 'flex items-center gap-2' },
+                        e('i', { 'data-lucide': 'wallet', class: 'w-6 h-6 text-emerald-500' }),
+                        e('span', { class: 'font-bold text-lg text-slate-800 tracking-wide' }, '清流記帳')
+                    ),
+                    e('span', { class: 'text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded-full font-medium' }, 'Web App 版')
+                ),
+
+                // 中間內容區
+                e('main', { class: 'flex-1 overflow-y-auto p-4 pb-24 no-scrollbar' },
+                    activeTab === 'home' && e('div', { class: 'space-y-4' },
+                        // 帳冊切換區
+                        e('div', { class: 'bg-white p-4 rounded-2xl border border-slate-100 shadow-sm' },
+                            e('div', { class: 'flex justify-between items-center mb-3' },
+                                e('span', { class: 'text-sm font-semibold text-slate-500 flex items-center gap-1' }, '📁 當前帳冊'),
+                                e('button', { onClick: () => setIsBookModalOpen(true), class: 'text-xs text-emerald-600 font-medium flex items-center gap-0.5' }, '＋ 新增帳冊')
+                            ),
+                            e('select', { 
+                                value: currentBookId, 
+                                onChange: (e) => setCurrentBookId(e.target.value),
+                                class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-slate-700 font-medium focus:outline-none focus:border-emerald-500'
+                            }, books.map(b => e('option', { key: b.id, value: b.id }, `${b.icon} ${b.name}`)))
+                        ),
+                        // 總覽卡片
+                        e('div', { class: 'bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white shadow-md relative overflow-hidden' },
+                            e('div', { class: 'absolute -right-6 -bottom-6 text-white/5 font-bold text-8xl pointer-events-none' }, '$'),
+                            e('p', { class: 'text-slate-400 text-xs font-medium tracking-wider' }, currentBook.name + ' / 本月結餘'),
+                            e('h2', { class: 'text-3xl font-bold mt-1 tracking-tight' }, `$${balance.toLocaleString()}`),
+                            currentBook.budget > 0 && e('div', { class: 'mt-4 pt-4 border-t border-white/10 space-y-1.5' },
+                                e('div', { class: 'flex justify-between text-xs text-slate-400' },
+                                    e('span', null, `預算進度: $${totalExpense} / $${currentBook.budget}`),
+                                    e('span', null, `${Math.min(Math.round((totalExpense/currentBook.budget)*100), 100)}%`)
+                                ),
+                                e('div', { class: 'w-full bg-white/10 h-1.5 rounded-full overflow-hidden' },
+                                    e('div', { class: `h-full rounded-full ${totalExpense > currentBook.budget ? 'bg-rose-500' : 'bg-emerald-400'}`, style: { width: `${Math.min((totalExpense/currentBook.budget)*100, 100)}%` } })
+                                )
+                            )
+                        ),
+                        // 收支小卡
+                        e('div', { class: 'grid grid-cols-2 gap-3' },
+                            e('div', { class: 'bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex items-center gap-3' },
+                                e('div', { class: 'p-2 bg-emerald-50 rounded-lg text-emerald-600' }, e('i', { 'data-lucide': 'trending-up', class: 'w-5 h-5' })),
+                                e('div', null, e('p', { class: 'text-xs text-slate-400 font-medium' }, '累積收入'), e('p', { class: 'text-lg font-bold text-slate-700' }, `$${totalIncome}`))
+                            ),
+                            e('div', { class: 'bg-white p-4 rounded-xl border border-slate-100 shadow-sm flex items-center gap-3' },
+                                e('div', { class: 'p-2 bg-rose-50 rounded-lg text-rose-600' }, e('i', { 'data-lucide': 'trending-down', class: 'w-5 h-5' })),
+                                e('div', null, e('p', { class: 'text-xs text-slate-400 font-medium' }, '累積支出'), e('p', { class: 'text-lg font-bold text-slate-700' }, `$${totalExpense}`))
+                            )
+                        ),
+                        // 近期交易
+                        e('div', { class: 'space-y-2' },
+                            e('h3', { class: 'text-sm font-bold text-slate-500 px-1' }, '近期明細 (最新 3 筆)'),
+                            bookTransactions.length === 0 ? e('div', { class: 'text-center py-8 text-slate-400 text-xs bg-white rounded-xl border border-dashed border-slate-200' }, '尚無交易明細，點下方 ＋ 開始記帳') :
+                            bookTransactions.slice(0, 3).map(t => e('div', { key: t.id, class: 'bg-white p-3 rounded-xl border border-slate-50 shadow-sm flex justify-between items-center' },
+                                e('div', { class: 'flex items-center gap-3' },
+                                    e('div', { class: `w-10 h-10 rounded-xl flex items-center justify-center font-bold ${t.type==='income'?'bg-emerald-50 text-emerald-600':'bg-rose-50 text-rose-600'}` }, t.category[0] || '💸'),
+                                    e('div', null, e('p', { class: 'text-sm font-semibold text-slate-700' }, t.note || t.category), e('p', { class: 'text-xxs text-slate-400 mt-0.5' }, t.date))
+                                ),
+                                e('span', { class: `font-bold text-sm ${t.type==='income'?'text-emerald-500':'text-rose-500'}` }, `${t.type==='income'?'+':'-'}$${t.amount}`)
+                            ))
+                        )
+                    ),
+
+                    activeTab === 'list' && e('div', { class: 'space-y-3' },
+                        e('h3', { class: 'text-sm font-bold text-slate-500 px-1' }, `${currentBook.name} - 歷史明細清單`),
+                        bookTransactions.length === 0 ? e('div', { class: 'text-center py-12 text-slate-400 text-xs bg-white rounded-xl border border-dashed border-slate-200' }, '帳冊空空如也') :
+                        bookTransactions.map(t => e('div', { key: t.id, class: 'bg-white p-3.5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center' },
+                            e('div', { class: 'flex items-center gap-3' },
+                                e('div', { class: `w-10 h-10 rounded-xl flex items-center justify-center font-bold ${t.type==='income'?'bg-emerald-50 text-emerald-600':'bg-rose-50 text-rose-600'}` }, t.category[0]),
+                                e('div', null, e('p', { class: 'text-sm font-bold text-slate-700' }, t.note || t.category), e('p', { class: 'text-xs text-slate-400' }, t.date))
+                            ),
+                            e('div', { class: 'flex items-center gap-3' },
+                                e('span', { class: `font-bold text-base ${t.type==='income'?'text-emerald-500':'text-rose-500'}` }, `${t.type==='income'?'+':'-'}$${t.amount}`),
+                                e('button', { onClick: () => deleteTransaction(t.id), class: 'text-slate-300 hover:text-rose-500 transition-colors' }, e('i', { 'data-lucide': 'trash-2', class: 'w-4 h-4' }))
+                            )
+                        ))
+                    ),
+
+                    activeTab === 'analysis' && e('div', { class: 'space-y-4' },
+                        // 每週結算卡片
+                        e('div', { class: 'bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-4' },
+                            e('div', null, e('h3', { class: 'font-bold text-slate-800 text-base' }, '📊 每週消費結算'), e('p', { class: 'text-xs text-slate-400' }, '自動統計當前帳冊的每週支出趨勢')),
+                            e('div', { class: 'space-y-3.5' }, getWeeklyData().map((w, idx) => {
+                                const maxAmt = Math.max(...getWeeklyData().map(x => x.amt), 1);
+                                const percent = (w.amt / maxAmt) * 100;
+                                return e('div', { key: idx, class: 'space-y-1' },
+                                    e('div', { class: 'flex justify-between text-xs font-medium text-slate-600' }, e('span', null, w.label), e('span', { class: 'font-bold text-slate-700' }, `$${w.amt.toLocaleString()}`)),
+                                    e('div', { class: 'w-full bg-slate-100 h-2.5 rounded-full overflow-hidden' },
+                                        e('div', { class: 'h-full bg-emerald-500 rounded-full transition-all duration-500', style: { width: `${percent}%` } })
+                                    )
+                                );
+                            }))
+                        )
+                    )
+                ),
+
+                // 底部固定導覽列 (Tab Bar)
+                e('nav', { class: 'absolute bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-100 h-16 flex items-center justify-around px-2 z-40 shadow-lg' },
+                    e('button', { onClick: () => setActiveTab('home'), class: `flex flex-col items-center gap-0.5 w-16 transition-colors ${activeTab==='home'?'text-emerald-500':'text-slate-400'}` },
+                        e('i', { 'data-lucide': 'layout-dashboard', class: 'w-5 h-5' }), e('span', { class: 'text-xxs font-semibold' }, '帳冊主頁')
+                    ),
+                    // 中央懸浮加號按鈕
+                    e('button', { onClick: () => setIsModalOpen(true), class: 'w-12 h-12 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-md shadow-emerald-200 -mt-5 active:scale-95 transition-transform border-4 border-white' },
+                        e('i', { 'data-lucide': 'plus', class: 'w-6 h-6' })
+                    ),
+                    e('button', { onClick: () => setActiveTab('list'), class: `flex flex-col items-center gap-0.5 w-16 transition-colors ${activeTab==='list'?'text-emerald-500':'text-slate-400'}` },
+                        e('i', { 'data-lucide': 'clipboard-list', class: 'w-5 h-5' }), e('span', { class: 'text-xxs font-semibold' }, '明細清單')
+                    ),
+                    e('button', { onClick: () => setActiveTab('analysis'), class: `flex flex-col items-center gap-0.5 w-16 transition-colors ${activeTab==='analysis'?'text-emerald-500':'text-slate-400'}` },
+                        e('i', { 'data-lucide': 'bar-chart-3', class: 'w-5 h-5' }), e('span', { class: 'text-xxs font-semibold' }, '預算分析')
+                    )
+                ),
+
+                // 記一筆彈出視窗 (Bottom Sheet 抽屜樣式)
+                isModalOpen && e('div', { class: 'absolute inset-0 bg-black/40 z-50 flex items-end animate-fade-in' },
+                    e('form', { onSubmit: handleAddTransaction, class: 'w-full bg-white rounded-t-2xl p-5 space-y-4 max-h-[85%] overflow-y-auto shadow-2xl border-t border-slate-100' },
+                        e('div', { class: 'flex justify-between items-center border-b border-slate-100 pb-2' },
+                            e('h4', { class: 'font-bold text-slate-800 text-base' }, '💰 記一筆交易'),
+                            e('button', { type: 'button', onClick: () => setIsModalOpen(false), class: 'text-slate-400' }, e('i', { 'data-lucide': 'x', class: 'w-5 h-5' }))
+                        ),
+                        // 分類切換
+                        e('div', { class: 'flex bg-slate-100 p-1 rounded-xl' },
+                            e('button', { type: 'button', onClick: () => { setTxType('expense'); setTxCategory('餐飲'); }, class: `flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${txType==='expense'?'bg-white text-rose-500 shadow-sm':'text-slate-500'}` }, '支出'),
+                            e('button', { type: 'button', onClick: () => { setTxType('income'); setTxCategory('本薪'); }, class: `flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${txType==='income'?'bg-white text-emerald-500 shadow-sm':'text-slate-500'}` }, '收入')
+                        ),
+                        // 金額輸入
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '金額 ($)'),
+                            e('input', { type: 'number', required: true, placeholder: '0', value: txAmount, onChange: (e) => setTxAmount(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-base font-bold text-slate-800 focus:outline-none focus:border-emerald-500' })
+                        ),
+                        // 分類選擇
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '分類'),
+                            e('select', { value: txCategory, onChange: (e) => setTxCategory(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700' },
+                                txType === 'expense' ? 
+                                ['餐飲', '交通', '購物', '娛樂', '居住', '其他'].map(c => e('option', { key: c, value: c }, c)) :
+                                ['本薪', '獎金', '投資', '副業', '其他'].map(c => e('option', { key: c, value: c }, c))
+                            )
+                        ),
+                        // 日期選擇
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '日期'),
+                            e('input', { type: 'date', value: txDate, onChange: (e) => setTxDate(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700' })
+                        ),
+                        // 備註
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '備註說明'),
+                            e('input', { type: 'text', placeholder: '如：拉麵、買衣服...', value: txNote, onChange: (e) => setTxNote(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700' })
+                        ),
+                        // 送出按鈕
+                        e('button', { type: 'submit', class: 'w-full bg-emerald-500 text-white font-bold py-2.5 rounded-xl shadow-md active:scale-98 transition-transform mt-2' }, '確認新增')
+                    )
+                ),
+
+                // 新增帳冊彈出視窗
+                isBookModalOpen && e('div', { class: 'absolute inset-0 bg-black/40 z-50 flex items-center justify-center p-4' },
+                    e('form', { onSubmit: handleAddBook, class: 'w-full max-w-xs bg-white rounded-2xl p-5 space-y-4 shadow-2xl border border-slate-100' },
+                        e('div', { class: 'flex justify-between items-center border-b border-slate-100 pb-2' },
+                            e('h4', { class: 'font-bold text-slate-800 text-base' }, '📁 新增自訂帳冊'),
+                            e('button', { type: 'button', onClick: () => setIsBookModalOpen(false), class: 'text-slate-400' }, e('i', { 'data-lucide': 'x', class: 'w-5 h-5' }))
+                        ),
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '帳冊名稱'),
+                            e('input', { type: 'text', required: true, placeholder: '例：出國旅遊、情侶公帳', value: newBookName, onChange: (e) => setNewBookName(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700' })
+                        ),
+                        e('div', { class: 'space-y-1' },
+                            e('label', { class: 'text-xs font-bold text-slate-500' }, '每月預算上限 (選填, 0為不設)'),
+                            e('input', { type: 'number', placeholder: '0', value: newBookBudget, onChange: (e) => setNewBookBudget(e.target.value), class: 'w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700' })
+                        ),
+                        e('button', { type: 'submit', class: 'w-full bg-emerald-500 text-white font-bold py-2.5 rounded-xl shadow-md active:scale-98 transition-transform' }, '建立新帳冊')
+                    )
+                )
+            );
+        }
+
+        // 啟動 React
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(e(App));
+    </script>
+</body>
+</html>
